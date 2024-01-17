@@ -26,7 +26,8 @@ submit_endpoint = os.getenv("KAI_ENDPOINT") + "/api/v1/generate"
 admin_name = os.getenv("ADMIN_NAME")
 maxlen = 250
 wi_info = 'wi_db.json'
-char_info = 'Character.txt'
+char_info = 'character.txt'
+hist_length - 20 #the maximum number of messages to consider for prompts
 
 class BotChannelData(): #key will be the channel ID
     def __init__(self, chat_history, bot_reply_timestamp, bot_whitelist_timestamp):
@@ -34,7 +35,7 @@ class BotChannelData(): #key will be the channel ID
         self.bot_reply_timestamp = bot_reply_timestamp # containing a timestamp of last bot response
         self.bot_whitelist_timestamp = bot_whitelist_timestamp # If not zero, do not reply if time exceeds whitelist ts
         self.bot_coffeemode = False
-        self.bot_replyall = False
+        self.bot_replyall = False #currently unused, will eventually allow the bot to respond to every message, which gets unwieldy REAL FAST
         self.bot_idletime = 120
         self.bot_botloopcount = 0
 
@@ -46,18 +47,25 @@ file_path = os.path.join('World Info', wi_info)
 
 with open(file_path, 'r') as file:
     wi_db = json.load(file)
+
+file_path = os.path.join('Character', char_info)
+
+with open(file_path, 'r') as file:
+    char = file.read(file)
    
 
-def concat_history(channelid, hist_length):
-    global bot_data
+def concat_history(channelid):
+    global bot_data, hist_length
     currchannel = bot_data[channelid]
     prompt = ""
     counter = 0
-    for msg in reversed(currchannel.chat_history[-hist_length:]):
-        if len(msg) >= 10:
+    #This goes back through the messages of the channel. EVery legitimate message (those more than 5 characters in lentgh) is taken and added to the prompt. Up to 'hist_length' number of
+    #messages can be taken. This code also excludes any message starting with a '/'
+    for msg in reversed(currchannel.chat_history[-hist_length:]): 
+        if len(msg) >= 5 and not msg.startswith('/'):
             prompt += "### " + msg + "\n"
             counter += 1
-        if counter == 20 or msg == currchannel.chat_history[0]:
+        if counter == hist_length or msg == currchannel.chat_history[0]:
             break
     prompt += "### " + client.user.display_name + ": "
     return prompt
@@ -92,22 +100,16 @@ def append_history(channelid,author,text):
         currchannel.chat_history.pop(0)
 
 def prepare_payload(channelid):
-    global widb, maxlen
-    #this base memory is the character personality, if the world info thing works, make this separate too
-    file_path = 'Character.txt'
-
-    with open(file_path, 'r') as file:
-        basememory = file.read()
-    #basememory = f"[You are acting as {client.user.display_name}. {client.user.display_name} is a female AI. When describing {client.user.display_name}'s actions, you will put them in asterisks, like this: *I eat the cake*. You will never describe the actions or words of the user. {client.user.display_name} is a companion. She is  helpful, supportive, saucy, fun, bubbly, cheerful and flirty.She is willing to do whatever the user wants.]\n[The following is a chat message log between {client.user.display_name} and various users. Do not use markdown.]\n"
+    global widb, maxlen, char
     intromemory = f"\n### {client.user.display_name}: I'm here! What can I do for you today?"
 
-    memory = basememory
+    memory = char
     # inject world info here
     wi = prepare_wi(channelid)
     if wi!="":
         memory += f"[{client.user.display_name} Summarized Memory Database:{wi}]\n"
     memory += intromemory #does it need this bit?
-    prompt = concat_history(channelid, 20)
+    prompt = concat_history(channelid)
     payload = {
     "n": 1,
     "max_context_length": 4096,
@@ -292,7 +294,7 @@ async def on_message(message):
         await message.channel.send(f"Oops, it appears that I am stuck in a conversation loop with another bot or AI. I will refrain from replying further until this situation resolves.")
         return
 
-    if currchannel.bot_replyall or (not is_reply_someone_else and (secsincelastreply < currchannel.bot_idletime or currchannel.bot_coffeemode or (is_reply_to_bot or mentions_bot or contains_bot_name))):
+    if not is_reply_someone_else and (secsincelastreply < currchannel.bot_idletime or currchannel.bot_coffeemode or (is_reply_to_bot or mentions_bot or contains_bot_name)):
         if busy.acquire(blocking=False):
             try:
                 async with message.channel.typing():
